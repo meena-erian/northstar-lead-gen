@@ -1,0 +1,49 @@
+portafile_version: 1
+name: Northstar Lead Generation
+source_template: ubuntu-25
+resources:
+  cpus: 2
+  ram_mib: 2048
+  disk_gib: 8
+inputs:
+  - id: django_secret_key
+    name: Django secret key
+    type: secret
+    required: true
+    description: A long random value used to secure sessions and form submissions.
+  - id: debug_mode
+    name: Debug mode
+    type: boolean
+    default: false
+    required: true
+    description: Keep disabled for normal public deployments.
+instructions:
+  - id: checkout-pinned-source
+    run: git clone https://github.com/meena-erian/northstar-lead-gen.git /opt/northstar && cd /opt/northstar && git checkout b2fe26a0bd3f009583793c524dd24c73053ef63a
+    timeout: 300
+  - id: write-configuration
+    run: cd /opt/northstar && printf 'DJANGO_SECRET_KEY=%s\nDJANGO_DEBUG=%s\n' "$DJANGO_SECRET_KEY" "$DEBUG_MODE" > .env && chmod 600 .env
+    timeout: 60
+  - id: install-dependencies
+    run: cd /opt/northstar && python3 -m venv .venv && .venv/bin/python -m pip install --upgrade pip && .venv/bin/pip install -r requirements.txt
+    timeout: 1800
+  - id: prepare-database-and-static-files
+    run: cd /opt/northstar && set -a && . ./.env && set +a && .venv/bin/python manage.py migrate --noinput && .venv/bin/python manage.py collectstatic --noinput
+    timeout: 900
+  - id: install-service
+    run: printf '%s\n' '[Unit]' 'Description=Northstar lead generation app' 'After=network-online.target' 'Wants=network-online.target' '' '[Service]' 'Type=simple' 'WorkingDirectory=/opt/northstar' 'EnvironmentFile=/opt/northstar/.env' "Environment=PORTACODE_PRIMARY_PUBLIC_HOST=$PORTACODE_PRIMARY_PUBLIC_HOST" "Environment=PORTACODE_PRIMARY_PUBLIC_URL=$PORTACODE_PRIMARY_PUBLIC_URL" 'ExecStart=/opt/northstar/.venv/bin/gunicorn --workers 3 --bind 0.0.0.0:8000 northstar.wsgi:application' 'Restart=always' 'RestartSec=5' '' '[Install]' 'WantedBy=multi-user.target' | sudo tee /etc/systemd/system/northstar.service >/dev/null && sudo systemctl daemon-reload && sudo systemctl enable --now northstar
+    timeout: 300
+  - id: wait-for-local-app
+    wait_for: http://localhost:8000/
+    timeout: 600
+  - id: wait-for-public-app
+    wait_for: https://[exposed:8000]/
+    timeout: 600
+expose_ports:
+  - 8000
+project_paths:
+  - /opt/northstar
+acceptance:
+  - name: Landing page loads
+    url: https://[exposed:8000]/
+    expect_status: 200
